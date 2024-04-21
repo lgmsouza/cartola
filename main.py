@@ -1,25 +1,20 @@
 import requests
 import pandas as pd
-import sqlalchemy
-from sqlalchemy import text
 import json
-import get_atleta_id
 
 with open('utils.json','r') as f:
     utils = json.load(f)
     
 ACCESS_TOKEN = utils['token']
-PASSWORD = utils['password']
 
 class CartolaFC(object):
     
     access_token = None
     base_url = "https://api.cartola.globo.com"
     
-    def __init__(self,access_token,password,*args, **kwargs):
+    def __init__(self,access_token,*args, **kwargs):
         super().__init__(*args, **kwargs)
         self.access_token = access_token
-        self.password = password
         
     def get_headers_auth(self):
         access_token = self.access_token
@@ -44,24 +39,57 @@ class CartolaFC(object):
         endpoint = f"{base_url}/auth/time"
         headers = self.get_headers_auth()        
         r = requests.get(endpoint, headers=headers)
-        return r.json()        
+        return r.json()
     
+    def get_atleta_info(self):
+        
+        base_url = self.base_url
+        headers = self.get_headers()
+        endpoint = f'{base_url}/atletas/mercado'
+        r = requests.get(endpoint,headers=headers)
+        data = r.json()['atletas']        
+        aux=0
+        for i in range(len(data)):
+            dados_atleta=data[i]
+            df2=pd.DataFrame(dados_atleta)
+            df3=df2[["minimo_para_valorizar", "jogos_num", "atleta_id", "rodada_id",
+                     "clube_id", "posicao_id", "status_id", "pontos_num",
+                     "media_num", "variacao_num", "preco_num", "entrou_em_campo",
+                     "slug", "apelido", "apelido_abreviado", "nome"]].copy()           
+            if aux == 0:
+                df=df3.copy()
+            else:
+                df = pd.concat([df,df3],ignore_index=True)
+            aux+=1
+            
+        df['clube_id'] = df.clube_id.astype('str')                  
+        return df.drop_duplicates()
+        
     def get_players_database(self):
-        
-        password = self.password
-        engine = sqlalchemy.create_engine(f'mysql://root:{password}@localhost/my_database')
-        query = "SELECT * FROM cartola_fc.atletas;"
-        with engine.connect() as con:
-            return pd.read_sql(text(query), con)
-        
-    def check_rodada(self):
-        
-        rodada_banco = self.get_players_database().rodada_id.max()
-        rodada_atual = self.get_info_time()['rodada_atual']
-        if not (rodada_banco == rodada_atual-1):
-            get_atleta_id.run()     
-            return self.check_rodada()
-        return True
+         
+        base_url = self.base_url
+        headers = self.get_headers()
+        endpoint = f'{base_url}/clubes'
+        df = self.get_atleta_info()
+        r = requests.get(endpoint,headers=headers)
+        data = r.json()      
+        aux=0
+        for i in df.clube_id.unique():
+            df_clube = pd.DataFrame(data[i])
+            df_clube2 = df_clube[['nome','abreviacao','slug','id']]
+            if aux == 0:
+                dfclube=df_clube2.copy()
+            else:
+                dfclube = pd.concat([dfclube,df_clube2],ignore_index=True)
+            aux+=1
+            
+        df_clube = dfclube.rename(columns={'nome':'clube',
+                                           'abreviacao':'abreviacao_clube',
+                                           'slug':'slug_clube',
+                                           'id':'clube_id'}).drop_duplicates()
+        df_clube['clube_id'] = df_clube.clube_id.astype('str')        
+         
+        return df.merge(df_clube, on='clube_id', how='left').drop_duplicates()
         
     def get_esquema(self):
         return 3
@@ -149,9 +177,6 @@ class CartolaFC(object):
     
     def post_time(self):
         
-        if not self.check_rodada():
-            return "Atualize a Base de Jogadores!"
-        
         if not self.check_cartoletas():
             return 'Cartoletas Insuficientes'
            
@@ -167,9 +192,10 @@ class CartolaFC(object):
                 "capitao":capitao,
                 "reservas":reservas}
         r = requests.post(endpoint,json=json,headers=headers)
-        return r.json()
+        return r.text
     
 
-cartola = CartolaFC(ACCESS_TOKEN,PASSWORD)
-
-print(cartola.post_time())
+if __name__ == '__main__':
+        
+    cartola = CartolaFC(ACCESS_TOKEN)
+    print(cartola.post_time())
